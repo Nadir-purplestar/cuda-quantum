@@ -11,6 +11,7 @@
 #include "common/Timing.h"
 #include "cudaq/Optimizer/Builder/Intrinsics.h"
 #include "cudaq/Optimizer/CodeGen/IQMJsonEmitter.h"
+#include "cudaq/Optimizer/CodeGen/LQCloudJsonEmitter.h"
 #include "cudaq/Optimizer/CodeGen/OpenQASMEmitter.h"
 #include "cudaq/Optimizer/CodeGen/OptUtils.h"
 #include "cudaq/Optimizer/CodeGen/Passes.h"
@@ -737,6 +738,37 @@ void registerToIQMJsonTranslation() {
       });
 }
 
+void registerToLQCloudJsonTranslation() {
+  cudaq::TranslateFromMLIRRegistration reg(
+      "lqcloud", "translate from quake to LQCloud's json format",
+      [](mlir::Operation *op, llvm::raw_string_ostream &output,
+         const std::string &additionalPasses, bool printIR,
+         bool printIntermediateMLIR, bool printStats) {
+        ScopedTraceWithContext(cudaq::TIMING_JIT, "lqcloud translation");
+        mlir::PassManager pm(op->getContext());
+        if (printIntermediateMLIR)
+          pm.enableIRPrinting();
+        if (printStats)
+          pm.enableStatistics();
+        cudaq::opt::addPipelineTranslateToLQCloudJson(pm);
+        mlir::DefaultTimingManager tm;
+        tm.setEnabled(cudaq::isTimingTagEnabled(cudaq::TIMING_JIT_PASSES));
+        auto timingScope = tm.getRootScope();
+        pm.enableTiming(timingScope);
+        if (failed(pm.run(op)))
+          throw std::runtime_error("code generation failed.");
+        timingScope.stop();
+        auto passed = cudaq::translateToLQCloudJson(op, output);
+        if (printIR) {
+          if (succeeded(passed))
+            llvm::errs() << output.str();
+          else
+            llvm::errs() << "failed to create LQCloud json file.";
+        }
+        return passed;
+      });
+}
+
 std::once_flag mlir_init_flag;
 MLIRContext *mlirContext;
 std::unique_ptr<MLIRContext> createMLIRContext() {
@@ -758,6 +790,7 @@ void cudaq::initializeMLIR() {
     registerToQIRTranslation();
     registerToOpenQASMTranslation();
     registerToIQMJsonTranslation();
+    registerToLQCloudJsonTranslation();
 
     mlirContext = createMLIRContext().release();
   });

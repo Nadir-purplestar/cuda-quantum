@@ -31,7 +31,9 @@ details::future Executor::execute(std::vector<KernelExecution> &codesToExecute,
                jobPostPath);
 
     // Post it, get the response
-    auto response = client.post(jobPostPath, "", job, headers, true, false,
+    auto response = client.post(jobPostPath, "", job, headers, true,
+                                serverHelper->name() == "lqcloud" &&
+                                    jobPostPath.starts_with("https://"),
                                 serverHelper->getCookies());
     CUDAQ_INFO("Job (name={}) posted, response was {}", codesToExecute[i].name,
                response.dump());

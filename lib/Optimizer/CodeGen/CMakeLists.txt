@@ -20,6 +20,7 @@ add_cudaq_library(OptCodeGen
   ConvertToQIRProfile.cpp
   ConvertToQIR.cpp
   ConvertToQIRAPI.cpp
+  LQCloudGateSetMapping.cpp
   OptUtils.cpp
   Passes.cpp
   Pipelines.cpp
@@ -30,6 +31,7 @@ add_cudaq_library(OptCodeGen
   RemoveMeasurements.cpp
   ReturnToOutputLog.cpp
   TranslateToIQMJson.cpp
+  TranslateToLQCloudJson.cpp
   TranslateToOpenQASM.cpp
   VerifyNVQIRCalls.cpp
   VerifyQIRProfile.cpp

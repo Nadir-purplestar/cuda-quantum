@@ -31,6 +31,10 @@ public:
 
   RemoteRESTQPU(RemoteRESTQPU &&) = delete;
   virtual ~RemoteRESTQPU() = default;
+
+  bool supportsExplicitMeasurements() override {
+    return qpuName == "lqcloud" && !emulate;
+  }
 };
 } // namespace
 

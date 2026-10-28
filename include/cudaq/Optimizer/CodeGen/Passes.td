@@ -11,6 +11,23 @@
 
 include "mlir/Pass/PassBase.td"
 
+def LQCloudGateDecomposition :
+    Pass<"lqcloud-gate-decomposition", "mlir::ModuleOp"> {
+  let summary = "Decompose gates for the LQCloud H-Rz-CZ profile";
+  let description = [{
+    Reject negated controls and controlled SWAP before rewriting scalar
+    X, Y, Z, Rx, Ry and positive single-control X/Y toward the H-Rz-CZ
+    basis. Controlled X is lowered with the standard identity
+    CNOT(c,t) = H(t) CZ(c,t) H(t), matching the platform's reference
+    CNOT construction. Other shapes are left for the following basis
+    conversion.
+  }];
+  let dependentDialects = [
+    "mlir::arith::ArithDialect",
+    "quake::QuakeDialect"
+  ];
+}
+
 def QuakeToCC : Pass<"quake-to-cc", "mlir::ModuleOp"> {
   let summary = "Lower Quake to CC.";
   let description = [{

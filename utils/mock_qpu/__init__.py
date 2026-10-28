@@ -21,6 +21,7 @@ MOCK_QPU_PORTS = {
     "qci": 62449,
     "scaleway": 62450,
     "tii": 62451,
+    "lqcloud": 62452,
 }
 
 

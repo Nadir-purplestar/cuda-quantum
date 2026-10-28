@@ -221,12 +221,27 @@ std::vector<cudaq::KernelExecution> Compiler::lowerQuakeCodePart2(
     ExecutionContext *executionContext, const std::string &kernelName,
     void *kernelArgs, const std::vector<void *> &rawArgs,
     mlir::ModuleOp m_module, mlir::MLIRContext *contextPtr, void *updatedArgs) {
+  auto invocationPipelineConfig = this->passPipelineConfig;
+  auto &passPipelineConfig = codegenTranslation == "lqcloud"
+                                 ? invocationPipelineConfig
+                                 : this->passPipelineConfig;
   // Extract the kernel name
   auto origFn = m_module.template lookupSymbol<mlir::func::FuncOp>(
       std::string(cudaq::runtime::cudaqGenPrefixName) + kernelName);
 
   auto moduleOp =
       lowerQuakeCodeBuildModule(kernelName, m_module, contextPtr, origFn);
+
+  const bool explicitMeasurements = codegenTranslation == "lqcloud" &&
+                                    executionContext &&
+                                    executionContext->name == "sample" &&
+                                    executionContext->explicitMeasurements;
+  if (explicitMeasurements) {
+    moduleOp->setAttr("lqcloud.explicit_measurements",
+                      mlir::UnitAttr::get(contextPtr));
+    passPipelineConfig = std::regex_replace(
+        passPipelineConfig, std::regex("delay-measurements,"), "");
+  }
 
   // Lambda to apply a specific pipeline to the given ModuleOp
   auto runPassPipeline = [&](const std::string &pipeline,
@@ -387,11 +402,16 @@ std::vector<cudaq::KernelExecution> Compiler::lowerQuakeCodePart2(
                    });
   }
 
+  // LQCloud explicit results are indexed by measurement event, not by the
+  // mapper's final physical-qubit order.
+  if (explicitMeasurements)
+    mapping_reorder_idx.clear();
+
   if (executionContext) {
     if (executionContext->name == "sample") {
       executionContext->reorderIdx = mapping_reorder_idx;
       // Warn if kernel has named measurement registers (sub-registers).
-      if (!executionContext->warnedNamedMeasurements) {
+      if (!explicitMeasurements && !executionContext->warnedNamedMeasurements) {
         auto funcOp = moduleOp.template lookupSymbol<mlir::func::FuncOp>(
             std::string(cudaq::runtime::cudaqGenPrefixName) + kernelName);
         if (funcOp) {
@@ -416,7 +436,8 @@ std::vector<cudaq::KernelExecution> Compiler::lowerQuakeCodePart2(
         }
       }
       // No need to add measurements only to remove them eventually
-      if (postCodeGenPasses.find("remove-measurements") == std::string::npos)
+      if (!explicitMeasurements &&
+          postCodeGenPasses.find("remove-measurements") == std::string::npos)
         runPassPipeline("func.func(add-measurements)", moduleOp);
     } else {
       executionContext->reorderIdx.clear();

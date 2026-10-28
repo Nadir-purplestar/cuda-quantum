@@ -171,6 +171,10 @@ private:
         auto wireOpnds = collectLinearValues(op->getOperands());
         for (auto [t, r] : llvm::zip(wireOpnds, op->getResults().drop_front()))
           insertToEqClass(t, r);
+      } else if (auto barrier = dyn_cast<quake::BarrierOp>(op)) {
+        auto wireTargs = collectLinearValues(barrier.getTargets());
+        for (auto [t, r] : llvm::zip(wireTargs, barrier.getWires()))
+          insertToEqClass(t, r);
       } else if (isa<RAW_GATE_OPS>(op)) {
         auto gate = cast<quake::OperatorInterface>(op);
         // Check that the IR is not in the pruned control form.
@@ -312,6 +316,11 @@ public:
       auto newOp = rewriter.create<OP>(
           loc, ArrayRef<Type>{op.getMeasOut().getType()}, args, nameAttr);
       op.getResult(0).replaceAllUsesWith(newOp.getResult(0));
+      rewriter.eraseOp(op);
+    } else if constexpr (std::is_same_v<OP, quake::BarrierOp>) {
+      auto targets = collect(op.getTargets());
+      eraseWrapUsers(op);
+      rewriter.create<OP>(loc, TypeRange{}, targets);
       rewriter.eraseOp(op);
     } else if constexpr (std::is_same_v<OP, quake::ResetOp>) {
       // Reset is a special case.
@@ -544,14 +553,16 @@ public:
     };
     BlockSet fixupBlocks;
     RewritePatternSet patterns(ctx);
-    patterns.insert<NOWRAP_QUANTUM_OPS, CollapseWrappers<quake::ResetOp>,
+    patterns.insert<NOWRAP_QUANTUM_OPS, CollapseWrappers<quake::BarrierOp>,
+                    CollapseWrappers<quake::ResetOp>,
                     CollapseWrappers<quake::ReturnWireOp>,
                     CollapseWrappers<quake::SinkOp>, EraseWiresIf>(
         ctx, analysis, allocas);
     patterns.insert<EraseWiresBranch, EraseWiresCondBranch>(ctx, fixupBlocks);
     ConversionTarget target(*ctx);
-    target.addDynamicallyLegalOp<RAW_QUANTUM_OPS, quake::ResetOp, cf::BranchOp,
-                                 cf::CondBranchOp, cudaq::cc::IfOp>(
+    target.addDynamicallyLegalOp<RAW_QUANTUM_OPS, quake::BarrierOp,
+                                 quake::ResetOp, cf::BranchOp, cf::CondBranchOp,
+                                 cudaq::cc::IfOp>(
         [&](Operation *op) { return hasNoWires(op); });
     target.addIllegalOp<quake::SinkOp, quake::ReturnWireOp>();
     target.addLegalOp<quake::UnwrapOp, quake::DeallocOp>();

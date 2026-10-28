@@ -32,6 +32,11 @@ def start_server(backend: str):
             from mock_qpu.ionq import app
         case "iqm":
             from mock_qpu.iqm import app
+        case "lqcloud":
+            # This mock uses http.server rather than `FastAPI`.
+            from mock_qpu.lqcloud import startServer
+            startServer(port)
+            return
         case "oqc":
             from mock_qpu.oqc import app
         case "qci":

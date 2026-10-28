@@ -115,6 +115,11 @@ elseif (CUDAQ_ENABLE_PASQAL_QRMI_CONNECTOR AND NOT CMAKE_SYSTEM_NAME STREQUAL "L
   set(CUDAQ_ENABLE_PASQAL_QRMI_CONNECTOR OFF CACHE BOOL "Enable building the Pasqal QRMI connector." FORCE)
 endif()
 
+# Enable LQCloud target by default.
+if (NOT DEFINED CUDAQ_ENABLE_LQCLOUD_BACKEND)
+  set(CUDAQ_ENABLE_LQCLOUD_BACKEND ON CACHE BOOL "Enable building the LQCloud target.")
+endif()
+
 # Enable Quantum Circuits, Inc. (QCI) target by default.
 if (NOT DEFINED CUDAQ_ENABLE_QCI_BACKEND)
   set(CUDAQ_ENABLE_QCI_BACKEND ON CACHE BOOL "Enable building the Quantum Circuits, Inc. target.")

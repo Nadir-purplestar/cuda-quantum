@@ -587,7 +587,8 @@ public:
     // Scan the control and target positions. Any that were not Wires will be
     // promoted to Wires via an unwrap operation. These unwrap ops become the
     // arguments to the quantum value form of the new quantum operation.
-    if constexpr (!quake::isMeasure<OP>) {
+    if constexpr (!quake::isMeasure<OP> &&
+                  !std::is_same_v<OP, quake::BarrierOp>) {
       for (auto opnd : op.getControls()) {
         auto opndTy = opnd.getType();
         if (opndTy == qrefTy) {
@@ -635,6 +636,11 @@ public:
       SmallVector<Value> wireOperands = op.getTargets();
       op.getResult(0).replaceAllUsesWith(newOp.getResult(0));
       threadWires(wireOperands, newOp, 1);
+    } else if constexpr (std::is_same_v<OP, quake::BarrierOp>) {
+      SmallVector<Type> wireTys(unwrapTargs.size(), wireTy);
+      auto newOp = rewriter.create<OP>(loc, wireTys, unwrapTargs);
+      SmallVector<Value> wireOperands = op.getTargets();
+      threadWires(wireOperands, newOp, 0);
     } else {
       // Scan the control and target positions. Any that were not wires
       // originally are now placed in the result vector. Those new results are
@@ -1096,10 +1102,11 @@ public:
     auto func = getOperation();
     auto *ctx = &getContext();
     RewritePatternSet patterns(ctx);
-    patterns.insert<WRAPPER_QUANTUM_OPS, ResetOpPattern, DeallocOpPattern>(ctx);
+    patterns.insert<WRAPPER_QUANTUM_OPS, Wrapper<quake::BarrierOp>,
+                    ResetOpPattern, DeallocOpPattern>(ctx);
     ConversionTarget target(*ctx);
-    target.addDynamicallyLegalOp<RAW_QUANTUM_OPS, quake::ResetOp,
-                                 quake::DeallocOp>(
+    target.addDynamicallyLegalOp<RAW_QUANTUM_OPS, quake::BarrierOp,
+                                 quake::ResetOp, quake::DeallocOp>(
         [](Operation *op) { return !quake::hasNonVectorReference(op); });
     target.addLegalOp<quake::UnwrapOp, quake::WrapOp, quake::NullWireOp,
                       quake::SinkOp>();

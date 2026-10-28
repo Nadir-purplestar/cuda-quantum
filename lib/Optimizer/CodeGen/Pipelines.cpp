@@ -188,3 +188,21 @@ void cudaq::opt::addPipelineTranslateToIQMJson(PassManager &pm) {
   pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
   pm.addPass(createSymbolDCEPass());
 }
+
+void cudaq::opt::addPipelineTranslateToLQCloudJson(PassManager &pm) {
+  pm.addNestedPass<func::FuncOp>(createExpandMeasurementsPass());
+  pm.addNestedPass<func::FuncOp>(createCSEPass());
+  pm.addNestedPass<func::FuncOp>(createLoopNormalize());
+  LoopUnrollOptions luo;
+  pm.addNestedPass<func::FuncOp>(createLoopUnroll(luo));
+  pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  addLowerToCFG(pm);
+  pm.addNestedPass<func::FuncOp>(createStackFramePrealloc());
+  pm.addNestedPass<func::FuncOp>(createCombineQuantumAllocations());
+  pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  pm.addNestedPass<func::FuncOp>(createClassicalMemToReg());
+  pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  pm.addNestedPass<func::FuncOp>(createDeadStoreRemoval());
+  pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
+  pm.addPass(createSymbolDCEPass());
+}

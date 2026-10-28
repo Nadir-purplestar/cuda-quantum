@@ -891,6 +891,8 @@ def MappingFunc: Pass<"qubit-mapping-func", "mlir::func::FuncOp"> {
            "Decay delta">,
     Option<"roundsDecayReset", "roundsDecayReset", "unsigned", /*default=*/"5",
            "Number of rounds before decay is reset">,
+    Option<"allowReset", "allow-reset", "bool", /*default=*/"false",
+           "Allow reset operations to be routed">,
     Option<"nonComposable", "raise-fatal-errors", "bool", /*default=*/"false",
            "Run the pass in a non-composable way, which may cause immediate "
            "internal compiler errors">

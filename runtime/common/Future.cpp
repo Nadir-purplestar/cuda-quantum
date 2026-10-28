@@ -32,13 +32,17 @@ sample_result future::get() {
 
     CUDAQ_INFO("Future got job retrieval path as {}.", jobGetPath);
     auto resultResponse =
-        client.get(jobGetPath, "", headers, false, serverHelper->getCookies());
+        client.get(jobGetPath, "", headers,
+                   qpuName == "lqcloud" && jobGetPath.starts_with("https://"),
+                   serverHelper->getCookies());
     while (!serverHelper->jobIsDone(resultResponse)) {
       auto polling_interval =
           serverHelper->nextResultPollingInterval(resultResponse);
       std::this_thread::sleep_for(polling_interval);
-      resultResponse = client.get(jobGetPath, "", headers, false,
-                                  serverHelper->getCookies());
+      resultResponse =
+          client.get(jobGetPath, "", headers,
+                     qpuName == "lqcloud" && jobGetPath.starts_with("https://"),
+                     serverHelper->getCookies());
     }
 
     if (resultType == ExecutionContextType::run) {

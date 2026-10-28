@@ -53,6 +53,11 @@ void identityPlacement(Placement &placement) {
 // Routing
 //===----------------------------------------------------------------------===//
 
+bool isSupportedRoutingOperation(Operation *op, bool allowReset) {
+  return quake::isSupportedMappingOperation(op) ||
+         (allowReset && isa<quake::ResetOp>(op));
+}
+
 /// This class encapsulates an quake operation that uses wires with information
 /// about the virtual qubits these wires correspond.
 struct VirtualOp {
@@ -100,11 +105,11 @@ class SabreRouter {
 public:
   SabreRouter(const Device &device, WireMap &wireMap, Placement &placement,
               unsigned extendedLayerSize, float extendedLayerWeight,
-              float decayDelta, unsigned roundsDecayReset)
+              float decayDelta, unsigned roundsDecayReset, bool allowReset)
       : device(device), wireToVirtualQ(wireMap), placement(placement),
         extendedLayerSize(extendedLayerSize),
         extendedLayerWeight(extendedLayerWeight), decayDelta(decayDelta),
-        roundsDecayReset(roundsDecayReset),
+        roundsDecayReset(roundsDecayReset), allowReset(allowReset),
         phyDecay(device.getNumQubits(), 1.0), phyToWire(device.getNumQubits()),
         allowMeasurementMapping(false) {}
 
@@ -139,6 +144,7 @@ private:
   const float extendedLayerWeight;
   const float decayDelta;
   const unsigned roundsDecayReset;
+  const bool allowReset;
 
   // Internal data
   SmallVector<VirtualOp> frontLayer;
@@ -173,7 +179,7 @@ void SabreRouter::visitUsers(ResultRange::user_range users,
     if (incremented)
       incremented->push_back(user);
 
-    if (!quake::isSupportedMappingOperation(user)) {
+    if (!isSupportedRoutingOperation(user, allowReset)) {
       LLVM_DEBUG({
         auto *tmpOp = dyn_cast<mlir::Operation *>(user);
         logger.getOStream() << "WARNING: unsupported op: " << *tmpOp << '\n';
@@ -207,7 +213,8 @@ LogicalResult SabreRouter::mapOperation(VirtualOp &virtOp) {
 
   // An operation cannot be mapped if it is not a measurement and uses two
   // qubits virtual qubit that are no adjacently placed.
-  if (!virtOp.op->hasTrait<QuantumMeasure>() && deviceQubits.size() == 2 &&
+  if (!virtOp.op->hasTrait<QuantumMeasure>() &&
+      !isa<quake::BarrierOp>(virtOp.op) && deviceQubits.size() == 2 &&
       !device.areConnected(deviceQubits[0], deviceQubits[1]))
     return failure();
 
@@ -281,6 +288,7 @@ void SabreRouter::selectExtendedLayer() {
       // We only add operations that can influence placement to the extended
       // frontlayer, i.e., quantum operators that use two qubits.
       if (!virtOp.op->hasTrait<QuantumMeasure>() &&
+          !isa<quake::BarrierOp>(virtOp.op) &&
           quake::getQuantumOperands(virtOp.op).size() == 2)
         extendedLayer.emplace_back(virtOp);
     tmpLayer = std::move(newTmpLayer);
@@ -733,7 +741,7 @@ struct MappingFunc : public cudaq::opt::impl::MappingFuncBase<MappingFunc> {
         }
         LLVM_DEBUG(llvm::dbgs() << "quantum reference semantics not expected");
         return;
-      } else if (quake::isSupportedMappingOperation(&op)) {
+      } else if (isSupportedRoutingOperation(&op, allowReset)) {
         // Make sure the operation is using value semantics.
         if (!quake::isLinearValueForm(&op)) {
           if (nonComposable) {
@@ -760,7 +768,8 @@ struct MappingFunc : public cudaq::opt::impl::MappingFuncBase<MappingFunc> {
         // Get the wire operands and check if the operators uses at most two
         // qubits. N.B: Measurements do not have this restriction.
         auto wireOperands = quake::getQuantumOperands(&op);
-        if (!op.hasTrait<QuantumMeasure>() && wireOperands.size() > 2) {
+        if (!op.hasTrait<QuantumMeasure>() && !isa<quake::BarrierOp>(op) &&
+            wireOperands.size() > 2) {
           if (nonComposable) {
             func.emitError("Cannot map a kernel with operators that use more "
                            "than two qubits.");
@@ -862,20 +871,23 @@ struct MappingFunc : public cudaq::opt::impl::MappingFuncBase<MappingFunc> {
     // Route
     SabreRouter router(*deviceInstance, wireToVirtualQ, placement,
                        extendedLayerSize, extendedLayerWeight, decayDelta,
-                       roundsDecayReset);
+                       roundsDecayReset, allowReset);
     router.route(*blocks.begin(), sources);
     sortTopologically(&block);
 
     // Ensure that the original measurement ordering is still honored by moving
     // the measurements to the end (in their original order). Note that we must
     // move the users of those measurements to the end as well.
-    for (Operation *measure : measureOrder) {
-      SmallVector<Operation *> opsToMoveToEnd;
-      addOpAndUsersToList(measure, opsToMoveToEnd);
-      for (Operation *op : opsToMoveToEnd)
-        block.getOperations().splice(std::prev(block.end()),
-                                     block.getOperations(), op->getIterator());
-    }
+    // Explicit LQCloud measurements already have stable event identities.
+    // Retain the routed SSA dependency order, including gates after a measure.
+    if (!mod->hasAttr("lqcloud.explicit_measurements"))
+      for (Operation *measure : measureOrder) {
+        SmallVector<Operation *> opsToMoveToEnd;
+        addOpAndUsersToList(measure, opsToMoveToEnd);
+        for (Operation *op : opsToMoveToEnd)
+          block.getOperations().splice(
+              std::prev(block.end()), block.getOperations(), op->getIterator());
+      }
 
     // Remove any unused BorrowWireOps and add ReturnWireOp's where needed
     // unsigned highestMappedQubit = 0;
@@ -961,6 +973,7 @@ struct MappingPipelineOptions
   DECLARE_SUB_OPTION(MappingFuncOptions, extendedLayerWeight);
   DECLARE_SUB_OPTION(MappingFuncOptions, decayDelta);
   DECLARE_SUB_OPTION(MappingFuncOptions, roundsDecayReset);
+  PassOptions::Option<bool> allowReset{*this, "allow-reset"};
   PassOptions::Option<bool> nonComposable{*this, "raise-fatal-errors"};
 };
 
@@ -988,6 +1001,7 @@ void registerMappingPipeline() {
         setIt(funcOpts.extendedLayerWeight, opt.extendedLayerWeight);
         setIt(funcOpts.decayDelta, opt.decayDelta);
         setIt(funcOpts.roundsDecayReset, opt.roundsDecayReset);
+        setIt(funcOpts.allowReset, opt.allowReset);
         setIt(funcOpts.nonComposable, opt.nonComposable);
         pm.addNestedPass<func::FuncOp>(cudaq::opt::createMappingFunc(funcOpts));
       });

@@ -64,6 +64,8 @@ LogicalResult quake::verifyWireArityAndCoarity(Operation *op) {
     getCounts(gate);
   } else if (auto meas = dyn_cast<MeasurementInterface>(op)) {
     getCounts(meas);
+  } else if (auto barrier = dyn_cast<BarrierOp>(op)) {
+    getCounts(barrier);
   }
   if (arity == coarity)
     return success();
@@ -71,7 +73,8 @@ LogicalResult quake::verifyWireArityAndCoarity(Operation *op) {
 }
 
 bool quake::isSupportedMappingOperation(Operation *op) {
-  return isa<OperatorInterface, MeasurementInterface, SinkOp, ReturnWireOp>(op);
+  return isa<OperatorInterface, MeasurementInterface, BarrierOp, SinkOp,
+             ReturnWireOp>(op);
 }
 
 ValueRange quake::getQuantumTypesFromRange(ValueRange range) {
@@ -1008,6 +1011,22 @@ getModelessEffectsImpl(EffectsVectorImpl &effects, ValueRange controls,
     effects.emplace_back(MemoryEffects::Write::get(), v,
                          SideEffects::DefaultResource::get());
   }
+}
+
+void quake::BarrierOp::getEffects(EffectsVectorImpl &effects) {
+  getModelessEffectsImpl(effects, {}, getTargets());
+}
+
+LogicalResult quake::BarrierOp::verify() {
+  if (getTargets().empty())
+    return emitOpError("requires at least one target");
+  llvm::SmallPtrSet<void *, 8> targets;
+  for (Value target : getTargets())
+    if (!targets.insert(target.getAsOpaquePointer()).second)
+      return emitOpError("requires distinct targets");
+  if (failed(verifyWireArityAndCoarity(*this)))
+    return failure();
+  return verifyWireResultsAreLinear(*this);
 }
 
 /// For an operation with moded effects, the operation conditionally has
