@@ -1,74 +1,71 @@
-"""17-qubit, 60-round repetition circuit without between-round resets.
-
-This circuit was run on our configured CUDA-Q/LQCloud system. Running it
-elsewhere requires a CUDA-Q build containing the LQCloud backend and these
-environment variables:
-
-    LQCLOUD_API_KEY  API key read directly by the backend
-    LQCLOUD_URL      LQCloud service URL
-    LQCLOUD_QPU      Available exact device name
-
-The device must support at least 17 qubits and mid-circuit Z readout. The
-recorded repetition-code runs used QZ01-repetition_code with measurement
-type "measure". Initial reset is supplied by the backend; the circuit does
-not reset qubits between rounds. All 489 measurement events are retained.
-
-LQCLOUD_SHOTS defaults to 4096 and accepts a positive shot-count override.
-The program prints actual CUDA-Q counts once. It does not run a decoder or
-estimate error-correction performance.
-"""
-
+"""17-qubit, 60-round repetition experiment with chronological measurements."""
+import json
 import os
+from collections import Counter
 
 import cudaq
 
 
-def build_kernel(initial_state='000000000'):
-    import cudaq
-    if len(initial_state) != 9 or set(initial_state) - {'0', '1'}:
-        raise ValueError('Expected nine binary initial-state digits')
-    kernel = cudaq.make_kernel()
-    q = kernel.qalloc(17)
-    data, ancilla = list(range(0, 17, 2)), list(range(1, 17, 2))
-    for index, bit in zip(data, initial_state):
-        if bit == '1':
-            kernel.x(q[index])
-    for round_index in range(60):
-        kernel.barrier(q)
-        for index in ancilla:
-            kernel.h(q[index])
-        kernel.barrier(q)
-        for anc, dat in zip(ancilla, data[:-1]):
-            kernel.cz(q[anc], q[dat])
-        kernel.barrier(q)
-        for anc, dat in zip(ancilla, data[1:]):
-            kernel.cz(q[anc], q[dat])
-        kernel.barrier(q)
-        for index in ancilla:
-            kernel.h(q[index])
-        for index in data:
-            kernel.y(q[index])
-        kernel.barrier(q)
-        for index in ancilla:
-            kernel.mz(q[index])
-        if round_index == 59:
-            for index in data:
-                kernel.mz(q[index])
-    return kernel
+def build_kernel(initial_state="000000000"):
+    if len(initial_state) != 9 or set(initial_state) - {"0", "1"}:
+        raise ValueError("Expected nine binary initial-state digits")
+    initial_bits = [bit == "1" for bit in initial_state]
+
+    @cudaq.kernel
+    def repetition() -> list[bool]:
+        q = cudaq.qvector(17)
+        record = [False for _ in range(489)]
+        for index in range(9):
+            if initial_bits[index]:
+                x(q[2 * index])
+        for round_index in range(60):
+            barrier(q)
+            for index in range(8):
+                h(q[2 * index + 1])
+            barrier(q)
+            for index in range(8):
+                z.ctrl(q[2 * index + 1], q[2 * index])
+            barrier(q)
+            for index in range(8):
+                z.ctrl(q[2 * index + 1], q[2 * index + 2])
+            barrier(q)
+            for index in range(8):
+                h(q[2 * index + 1])
+            for index in range(9):
+                y(q[2 * index])
+            barrier(q)
+            for index in range(8):
+                record[8 * round_index + index] = mz(q[2 * index + 1])
+            if round_index == 59:
+                for index in range(9):
+                    record[480 + index] = mz(q[2 * index])
+        return record
+
+    return repetition
 
 
 def main():
+    if not os.environ.get("LQCLOUD_API_KEY"):
+        raise RuntimeError("Set LQCLOUD_API_KEY in the environment")
     shots = int(os.environ.get("LQCLOUD_SHOTS", "4096"))
     if shots <= 0:
-        raise ValueError("LQCLOUD_SHOTS must be a positive integer")
-    cudaq.set_target("lqcloud",
-                     url=os.environ["LQCLOUD_URL"],
-                     qpu=os.environ["LQCLOUD_QPU"],
-                     measurement_type="measure")
-    result = cudaq.sample_async(build_kernel(),
-                                shots_count=shots,
-                                explicit_measurements=True).get()
-    print(result)
+        raise ValueError("LQCLOUD_SHOTS must be positive")
+    cudaq.set_target(
+        "lqcloud",
+        url=os.environ.get("LQCLOUD_URL", "https://cloud.logicalqubit.com"),
+        qpu=os.environ.get("LQCLOUD_QPU", "QZ01-repetition_code"),
+        measurement_type="measure",
+    )
+    records = cudaq.run_async(build_kernel(), shots_count=shots).get()
+    if (type(records) is not list or len(records) != shots
+            or any(type(record) is not list or len(record) != 489
+                   or any(type(bit) is not bool for bit in record)
+                   for record in records)):
+        raise RuntimeError("Expected 489 chronological booleans per shot")
+    counts = Counter("".join("1" if bit else "0" for bit in record)
+                     for record in records)
+    print(json.dumps(dict(counts=counts), sort_keys=True))
+    return records
 
 
 if __name__ == "__main__":
